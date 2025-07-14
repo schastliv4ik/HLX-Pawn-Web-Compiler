@@ -1,211 +1,174 @@
-<?php
+#include <amxmodx>
+#include <fakemeta>
+#include <hamsandwich>
+#include <admin>
 
-require_once("functions.php");
+#define MAX_PLAYERS 32
 
-style_top("AMXX Compiler");
+new bool:g_bPunished[MAX_PLAYERS+1]; // Массив статуса наказания по индексу игрока (userid к clientid)
 
-$amxx = $sql->fetchall("amxxversions", "ORDER BY `Display`");
-$validated = TRUE;
-$row = 0;
-
-if (isset($_POST['compile']))
+public plugin_init()
 {
-    if ($_FILES['file']['error'] == UPLOAD_ERR_OK)
+    register_plugin("Плагин админ-команд с наказанием (анти-урон)", "1.0", "ChatGPT");
+
+    // Регистрация команд 
+    register_concmd("amx_punish", "cmdPunish", "a", 0, "Наказать игрока (анти-урон) - /amx_punish <id>");
+    register_concmd("amx_unpunish", "cmdUnPunish", "a", 0, "Снять наказание - /amx_unpunish <id>");
+    register_concmd("amx_punish_list", "cmdPunishList", "a", 0, "Показать список наказанных игроков");
+
+    // Стандартные админские команды уже есть в AMX Admin модуле - не повторяем
+    // Подписка на события урона
+    HookEvent("player_hurt", Event_PlayerHurt, EventHookMode_Post);
+
+    // Или используем хук на FakeMeta (Hamsandwich)
+    SDKHook(0, SDKHook_OnTakeDamage);
+}
+
+public sdkhook_ontakedamage(victim, &attacker, &inflictor, &damage, &damagetype)
+{
+    // Проверим, что атакер — игрок и наказан
+    if(attacker > 0 && attacker <= MAX_PLAYERS && g_bPunished[attacker])
     {
-        if (!in_array(pathinfo($_FILES['file']['name'], PATHINFO_EXTENSION), array('sma', 'zip', 'gz')))
+        // Обнуляем урон
+        damage = 0.0;
+
+        // Можно дополнительно убрать попадания - например, заморозить выстрелы. Но пожелано - пули должны лететь нормально.
+        return PLUGIN_HANDLED; // стоп обработка урона
+    }
+
+    return PLUGIN_CONTINUE;
+}
+
+public Event_PlayerHurt(Handle:event, const String:name[], bool:dontBroadcast)
+{
+    // Здесь можно иметь дополнительный контроль, но sdkhook лучше
+}
+
+public cmdPunish(id)
+{
+    if(!cmd_access(id, ACCESS_ADMIN, 0))
+    {
+        client_print(id, print_chat, "[Анти-Урон] У вас недостаточно прав.");
+        return PLUGIN_HANDLED;
+    }
+
+    new target = cmd_Arg(1);
+
+    if(target == 0)
+    {
+        client_print(id, print_chat, "[Анти-Урон] Использование: /amx_punish <id>");
+        return PLUGIN_HANDLED;
+    }
+
+    if(!is_user_connected(target))
+    {
+        client_print(id, print_chat, "[Анти-Урон] Игрок с таким ID не подключен.");
+        return PLUGIN_HANDLED;
+    }
+
+    if(g_bPunished[target])
+    {
+        client_print(id, print_chat, "[Анти-Урон] Игрок уже наказан.");
+        return PLUGIN_HANDLED;
+    }
+
+    g_bPunished[target] = true;
+
+    client_print(id, print_chat, "[Анти-Урон] Игрок %s наказан (анти-урон включен).", get_user_name(target));
+    // Отступим от правила, админы видят следующее сообщение, игрок - нет
+    for(new i=1; i<=MAX_PLAYERS; i++)
+    {
+        if(is_user_connected(i) && cmd_access(i, ACCESS_ADMIN, 0))
         {
-            echo "<div class=\"error\">Unable to proceed, invalid file type</div>";
-            $validated = FALSE;
+            client_print(i, print_chat, "[Анти-Урон] %s наказан админом %s.", get_user_name(target), get_user_name(id));
         }
     }
-    else if ($_FILES['file']['error'] == UPLOAD_ERR_NO_FILE)
+
+    return PLUGIN_HANDLED;
+}
+
+public cmdUnPunish(id)
+{
+    if(!cmd_access(id, ACCESS_ADMIN, 0))
     {
-        if ($_POST['boxname'] == "")
+        client_print(id, print_chat, "[Анти-Урон] У вас недостаточно прав.");
+        return PLUGIN_HANDLED;
+    }
+
+    new target = cmd_Arg(1);
+
+    if(target == 0)
+    {
+        client_print(id, print_chat, "[Анти-Урон] Использование: /amx_unpunish <id>");
+        return PLUGIN_HANDLED;
+    }
+
+    if(!is_user_connected(target))
+    {
+        client_print(id, print_chat, "[Анти-Урон] Игрок с таким ID не подключен.");
+        return PLUGIN_HANDLED;
+    }
+
+    if(!g_bPunished[target])
+    {
+        client_print(id, print_chat, "[Анти-Урон] Игрок не находится под наказанием.");
+        return PLUGIN_HANDLED;
+    }
+
+    g_bPunished[target] = false;
+
+    client_print(id, print_chat, "[Анти-Урон] Наказание с игрока %s снято.", get_user_name(target));
+    for(new i=1; i<=MAX_PLAYERS; i++)
+    {
+        if(is_user_connected(i) && cmd_access(i, ACCESS_ADMIN, 0))
         {
-            echo "<div class=\"error\">Unable to proceed, Plugin File Name missing</div>";
-            $validated = FALSE;
+            client_print(i, print_chat, "[Анти-Урон] Админ %s снял наказание с %s.", get_user_name(id), get_user_name(target));
         }
-        if ($_POST['boxcode'] == "")
+    }
+
+    return PLUGIN_HANDLED;
+}
+
+public cmdPunishList(id)
+{
+    if(!cmd_access(id, ACCESS_ADMIN, 0))
+    {
+        client_print(id, print_chat, "[Анти-Урон] У вас недостаточно прав.");
+        return PLUGIN_HANDLED;
+    }
+
+    new String:list[512] = "";
+    new count = 0;
+
+    for(new i=1; i<=MAX_PLAYERS; i++)
+    {
+        if(g_bPunished[i] && is_user_connected(i))
         {
-            echo "<div class=\"error\">Unable to proceed, Plugin Code missing</div>";
-            $validated = FALSE;
+            if(count > 0)
+            {
+                strcat(list, ", ", sizeof(list));
+            }
+            strcat(list, get_user_name(i), sizeof(list));
+            count++;
         }
+    }
+
+    if(count == 0)
+    {
+        client_print(id, print_chat, "[Анти-Урон] Список наказанных пуст.");
     }
     else
     {
-        switch ($_FILES['file']['error'])
-        {
-            case UPLOAD_ERR_INI_SIZE:
-            case UPLOAD_ERR_FORM_SIZE:
-            {
-                echo "<div class=\"error\">Unable to proceed, File Size Limit Exceeded</div>";
-                $validated = FALSE;
-                break;
-            }
-            case UPLOAD_ERR_NO_TMP_DIR:
-            case UPLOAD_ERR_CANT_WRITE:
-            {
-                echo "<div class=\"error\">Unable to proceed, Cannot write temporary file</div>";
-                $validated = FALSE;
-                break;
-            }
-            default:
-            {
-                echo "<div class=\"error\">Unable to proceed, Unknown File related error</div>";
-                $validated = FALSE;
-                break;
-            }
-        }
+        client_print(id, print_chat, "[Анти-Урон] Наказанные игроки: %s", list);
     }
-    
-    if ($_POST['ver'] != ".")
-    {
-        $count = 0;
-        $temp = FALSE;
-        while ($count < count($amxx) AND !$temp)
-        {
-            if ($amxx[$count]['ID'] == $_POST['ver'])
-			{
-				$row = $count;
-                $temp = TRUE;
-				break;
-			}
-        }
-        
-        if (!$temp)
-        {
-            echo "<div class=\"error\">Unable to proceed, Compiler Version missing</div>";
-            $validated = FALSE;
-        }
-    }
-}
-else
-	$validated = FALSE;
 
-if ($validated)
+    return PLUGIN_HANDLED;
+}
+
+public client_disconnect(id)
 {
-    $rand = sprintf("%09d", mt_rand(1, 99999999));
-    mkdir($general['temp']."/$rand");
-    
-    if ($_POST['boxcode'] != "")
+    if(id > 0 && id <= MAX_PLAYERS)
     {
-        file_put_contents($general['temp']."/$rand/".$_POST['boxname'].".sma", stripslashes($_POST['boxcode']));
-    }
-    else
-    {
-        switch (pathinfo($_FILES['file']['name'], PATHINFO_EXTENSION))
-        {
-            case "sma":
-            {
-                move_uploaded_file($_FILES['file']['tmp_name'], $general['temp']."/$rand/".$_FILES['file']['name']);
-                break;
-            }
-            case "zip":
-            {
-                $zip = new ZipArchive;
-                $res = $zip->open($_FILES['file']['tmp_name']);
-                if ($res === TRUE)
-                {
-                    $zip->extractTo($general['temp']."/$rand");
-                    $zip->close();
-                }
-                break;
-            }
-            case "gz":
-            {
-                move_uploaded_file($_FILES['file']['tmp_name'], $general['temp']."/$rand/".$_FILES['file']['name']);
-                exec("cd {$general['temp']}/$rand; tar xvfz ".$_FILES['file']['name']);
-                unlink($general['temp']."/$rand/".$_FILES['file']['name']);
-                break;
-            }
-        }
-    }
-    
-    
-    $sql->insert("compile", array("ID" => $rand, "Program" => "amxx", "VerID" => $_POST['ver']));
-    
-    $curl = curl_init("http://".$_SERVER["SERVER_NAME"].pathinfo($_SERVER["REQUEST_URI"], PATHINFO_DIRNAME)."compile.php?id=$rand");
-    curl_exec($curl);
-    curl_close($curl);
-    
-    if (count(scandir($general['compiled']."/$rand"))&1)
-    {
-		$sql->update("amxxversions", $_POST['ver'], array("Failure" => ($amxx[$row]['Failure']+1)));
-        echo "Compile failed. See the compiler output below.<br><br>";
-    }
-    else
-    {
-        $sql->update("amxxversions", $_POST['ver'], array("Success" => ($amxx[$row]['Success']+1)));
-?>
-Use the link below to download your plugin. It will expire after 1 hour<br>
-<a href="http://<?php echo $_SERVER["SERVER_NAME"].pathinfo($_SERVER["REQUEST_URI"], PATHINFO_DIRNAME); ?>download.php?id=<?php echo $rand; ?>">http://<?php echo $_SERVER["SERVER_NAME"].pathinfo($_SERVER["REQUEST_URI"], PATHINFO_DIRNAME); ?>download.php?id=<?php echo $rand; ?></a><br>
-<br>
-The compiler's output is shown below for reference.<br>
-<br>
-<?php
-
-    }
-    
-    $files = scandir($general['compiled']."/$rand");
-    foreach ($files as $object)
-    {
-        if ($object != "." && $object != "..")
-        {
-            if (pathinfo($general['compiled']."/$rand/".$object, PATHINFO_EXTENSION) == "txt")
-            {
-                $fail = explode("\n", file_get_contents($general['compiled']."/$rand/$object"));
-                for ($k = 0; $k < sizeof($fail); $k++)
-                    echo $fail[$k]."<br>";
-            }
-        }
+        g_bPunished[id] = false;
     }
 }
-else
-{
-    $versions = "<select name=\"ver\">";
-    $count = 0;
-    
-    while ($count < count($amxx))
-    {
-        if ($amxx[$count]['Name'] == "" AND $count == 0)
-            $versions .= "<option value=\".\" selected>N/A";
-        else if ($count == 0)
-            $versions .= "<option value=\"{$amxx[$count]['ID']}\" selected>{$amxx[$count]['Name']}";
-        else if ($amxx[$count]['Name'] == "")
-            break;
-        else
-            $versions .= "<option value=\"{$amxx[$count]['ID']}\">{$amxx[$count]['Name']}";
-        
-        $count++;
-    }
-    
-    $versions .= "</select>";
-
-?>
-<form method="post" enctype="multipart/form-data" action="amxmodx.php">
-You can use this to compile plugins online.<br>
-Once you upload a file, you will receive the compiler output and a link to the compiled plugin.<br>
-<a href="https://github.com/yamikaitou/HLX-Pawn-Web-Compiler/wiki/Upload-Guide">Guide to understanding the Upload System</a><br>
-<br>
-Select the Compiler Version: <?php echo $versions; ?><br>
-<br>
-Select a file to upload (*.sma, *.zip, *.tar.gz ONLY):<br>
-<input type="file" name="file"><br>
-<br>
-Or, you can paste your plugin's source code in the box below.<br>
-Plugin File Name: <input type="text" name="boxname"><br>
-<textarea name="boxcode" rows="25" cols="70"></textarea><br>
-<br>
-<input type="submit" name="compile" value="Compile"><br>
-</form>
-<?php
-
-}
-
-?>
-<br>
-<?php
-
-style_bot();
-
-?>
